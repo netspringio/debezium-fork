@@ -18,6 +18,7 @@ import org.postgresql.geometric.PGline;
 import org.postgresql.geometric.PGpath;
 import org.postgresql.geometric.PGpoint;
 import org.postgresql.geometric.PGpolygon;
+import org.postgresql.replication.LogSequenceNumber;
 import org.postgresql.util.PGmoney;
 
 import io.debezium.connector.postgresql.PostgresStreamingChangeEventSource;
@@ -140,6 +141,8 @@ public interface ReplicationMessage {
      */
     public Operation getOperation();
 
+    public LogSequenceNumber getLsn();
+
     /**
      * @return Transaction commit time for this change
      */
@@ -191,12 +194,14 @@ public interface ReplicationMessage {
 
     public class TransactionMessage implements ReplicationMessage {
 
+        private final LogSequenceNumber lsn;
         private final long transationId;
         private final Instant commitTime;
         private final Operation operation;
 
-        public TransactionMessage(Operation operation, long transactionId, Instant commitTime) {
+        public TransactionMessage(Operation operation, LogSequenceNumber lsn, long transactionId, Instant commitTime) {
             this.operation = operation;
+            this.lsn = lsn;
             this.transationId = transactionId;
             this.commitTime = commitTime;
         }
@@ -227,6 +232,11 @@ public interface ReplicationMessage {
         }
 
         @Override
+        public LogSequenceNumber getLsn() {
+            return lsn;
+        }
+
+        @Override
         public List<Column> getOldTupleList() {
             throw new UnsupportedOperationException();
         }
@@ -248,12 +258,14 @@ public interface ReplicationMessage {
      */
     public class NoopMessage implements ReplicationMessage {
 
+        private final LogSequenceNumber lsn;
         private final long transactionId;
         private final Instant commitTime;
         private final Operation operation;
 
-        public NoopMessage(long transactionId, Instant commitTime) {
+        public NoopMessage(LogSequenceNumber lsn, long transactionId, Instant commitTime) {
             this.operation = Operation.NOOP;
+            this.lsn = lsn;
             this.transactionId = transactionId;
             this.commitTime = commitTime;
         }
@@ -281,6 +293,11 @@ public interface ReplicationMessage {
         @Override
         public Operation getOperation() {
             return operation;
+        }
+
+        @Override
+        public LogSequenceNumber getLsn() {
+            return lsn;
         }
 
         @Override

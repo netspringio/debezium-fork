@@ -13,8 +13,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.debezium.annotation.ThreadSafe;
+import io.debezium.connector.base.ChangeEventQueue;
 import io.debezium.connector.common.CdcSourceTaskContext;
 import io.debezium.connector.postgresql.connection.PostgresConnection;
+import io.debezium.connector.postgresql.connection.RawReplicationMessage;
 import io.debezium.connector.postgresql.connection.ReplicationConnection;
 import io.debezium.connector.postgresql.spi.SlotState;
 import io.debezium.relational.TableId;
@@ -36,11 +38,13 @@ public class PostgresTaskContext extends CdcSourceTaskContext {
     private final PostgresConnectorConfig config;
     private final TopicSelector<TableId> topicSelector;
     private final PostgresSchema schema;
+    private final ChangeEventQueue<RawReplicationMessage> queue;
 
     private ElapsedTimeStrategy refreshXmin;
     private Long lastXmin;
 
-    protected PostgresTaskContext(PostgresConnectorConfig config, PostgresSchema schema, TopicSelector<TableId> topicSelector) {
+    protected PostgresTaskContext(PostgresConnectorConfig config, PostgresSchema schema, TopicSelector<TableId> topicSelector,
+                                  ChangeEventQueue<RawReplicationMessage> queue) {
         super(config.getContextName(), config.getLogicalName(), Collections::emptySet);
 
         this.config = config;
@@ -50,6 +54,7 @@ public class PostgresTaskContext extends CdcSourceTaskContext {
         this.topicSelector = topicSelector;
         assert schema != null;
         this.schema = schema;
+        this.queue = queue;
     }
 
     protected TopicSelector<TableId> topicSelector() {
@@ -121,6 +126,8 @@ public class PostgresTaskContext extends CdcSourceTaskContext {
                 .exportSnapshotOnCreate(exportSnapshot)
                 .doSnapshot(doSnapshot)
                 .withSchema(schema)
+                .withReceiveQueue(queue)
+                .withReceiveQueueParallelism(config.getReceiveQueueParallelism())
                 .build();
     }
 

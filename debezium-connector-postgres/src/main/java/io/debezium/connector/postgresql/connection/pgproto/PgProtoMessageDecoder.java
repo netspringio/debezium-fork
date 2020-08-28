@@ -11,6 +11,7 @@ import java.util.Arrays;
 import java.util.Set;
 
 import org.apache.kafka.connect.errors.ConnectException;
+import org.postgresql.replication.LogSequenceNumber;
 import org.postgresql.replication.fluent.logical.ChainedLogicalStreamBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,7 +46,7 @@ public class PgProtoMessageDecoder extends AbstractMessageDecoder {
     }
 
     @Override
-    public void processNotEmptyMessage(final ByteBuffer buffer, ReplicationMessageProcessor processor, TypeRegistry typeRegistry)
+    public void processNotEmptyMessage(final ByteBuffer buffer, LogSequenceNumber lsn, ReplicationMessageProcessor processor, TypeRegistry typeRegistry)
             throws SQLException, InterruptedException {
         try {
             if (!buffer.hasArray()) {

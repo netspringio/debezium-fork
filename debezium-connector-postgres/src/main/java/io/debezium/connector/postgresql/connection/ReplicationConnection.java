@@ -15,6 +15,7 @@ import org.postgresql.replication.PGReplicationStream;
 
 import io.debezium.annotation.NotThreadSafe;
 import io.debezium.config.Configuration;
+import io.debezium.connector.base.ChangeEventQueue;
 import io.debezium.connector.postgresql.PostgresConnectorConfig;
 import io.debezium.connector.postgresql.PostgresSchema;
 import io.debezium.connector.postgresql.TypeRegistry;
@@ -115,6 +116,7 @@ public interface ReplicationConnection extends AutoCloseable {
         String DEFAULT_PUBLICATION_NAME = "dbz_publication";
         boolean DEFAULT_DROP_SLOT_ON_CLOSE = true;
         boolean DEFAULT_EXPORT_SNAPSHOT = false;
+        int DEFAULT_PROCESSING_PARALLELISM = 32;
 
         /**
          * Sets the name for the PG logical replication slot
@@ -212,6 +214,22 @@ public interface ReplicationConnection extends AutoCloseable {
          * @return this instance
          */
         Builder doSnapshot(final boolean doSnapshot);
+
+        /**
+         * The queue to use for enqueuing messages received from source before they are
+         * picked up for processing.
+         * @param receiveQueue queue for enqueuing.
+         * @return this instance.
+         */
+        Builder withReceiveQueue(final ChangeEventQueue<RawReplicationMessage> receiveQueue);
+
+        /**
+         * Parallelism in processing records in the receive queue.
+         * @param receiveQueueParallelism amount of parallelism in processing messages from
+         *                              the receive queue.
+         * @return this instance.
+         */
+        Builder withReceiveQueueParallelism(final int receiveQueueParallelism);
 
         /**
          * Creates a new {@link ReplicationConnection} instance

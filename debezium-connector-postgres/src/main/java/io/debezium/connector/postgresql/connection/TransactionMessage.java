@@ -9,6 +9,8 @@ package io.debezium.connector.postgresql.connection;
 import java.time.Instant;
 import java.util.List;
 
+import org.postgresql.replication.LogSequenceNumber;
+
 /**
  * Replication message instance representing transaction demarcation events.
  *
@@ -17,12 +19,14 @@ import java.util.List;
  */
 public class TransactionMessage implements ReplicationMessage {
 
+    private final LogSequenceNumber lsn;
     private final long transationId;
     private final Instant commitTime;
     private final Operation operation;
 
-    public TransactionMessage(Operation operation, long transactionId, Instant commitTime) {
+    public TransactionMessage(Operation operation, LogSequenceNumber lsn, long transactionId, Instant commitTime) {
         this.operation = operation;
+        this.lsn = lsn;
         this.transationId = transactionId;
         this.commitTime = commitTime;
     }
@@ -50,6 +54,11 @@ public class TransactionMessage implements ReplicationMessage {
     @Override
     public Operation getOperation() {
         return operation;
+    }
+
+    @Override
+    public LogSequenceNumber getLsn() {
+        return lsn;
     }
 
     @Override

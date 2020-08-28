@@ -12,6 +12,7 @@ import java.time.Instant;
 import java.util.Arrays;
 
 import org.apache.kafka.connect.errors.ConnectException;
+import org.postgresql.replication.LogSequenceNumber;
 import org.postgresql.replication.fluent.logical.ChainedLogicalStreamBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -114,7 +115,8 @@ public class StreamingWal2JsonMessageDecoder extends AbstractMessageDecoder {
     }
 
     @Override
-    public void processNotEmptyMessage(ByteBuffer buffer, ReplicationMessageProcessor processor, TypeRegistry typeRegistry) throws SQLException, InterruptedException {
+    public void processNotEmptyMessage(ByteBuffer buffer, LogSequenceNumber lsn, ReplicationMessageProcessor processor, TypeRegistry typeRegistry)
+            throws SQLException, InterruptedException {
         try {
             if (!buffer.hasArray()) {
                 throw new IllegalStateException("Invalid buffer received from PG server during streaming replication");
@@ -134,7 +136,7 @@ public class StreamingWal2JsonMessageDecoder extends AbstractMessageDecoder {
                 byte firstChar = getFirstNonWhiteChar(content);
                 if (firstChar != LEFT_BRACE) {
                     outOfOrderChunk(content);
-                    nonInitialChunk(processor, typeRegistry, content);
+                    nonInitialChunk(processor, typeRegistry, content, lsn);
                 }
                 else {
                     // We received the beginning of a transaction
@@ -147,7 +149,7 @@ public class StreamingWal2JsonMessageDecoder extends AbstractMessageDecoder {
                     if (message.has("kind")) {
                         // This is not a preamble but out-of-order change chunk
                         outOfOrderChunk(content);
-                        nonInitialChunk(processor, typeRegistry, content);
+                        nonInitialChunk(processor, typeRegistry, content, lsn);
                     }
                     else {
                         // Correct initial chunk
@@ -156,12 +158,12 @@ public class StreamingWal2JsonMessageDecoder extends AbstractMessageDecoder {
                         commitTime = dateTime.systemTimestampToInstant(timestamp);
                         messageInProgress = true;
                         currentChunk = null;
-                        processor.process(new TransactionMessage(Operation.BEGIN, txId, commitTime));
+                        processor.process(new TransactionMessage(Operation.BEGIN, lsn, txId, commitTime));
                     }
                 }
             }
             else {
-                nonInitialChunk(processor, typeRegistry, content);
+                nonInitialChunk(processor, typeRegistry, content, lsn);
             }
         }
         catch (final IOException e) {
@@ -170,7 +172,7 @@ public class StreamingWal2JsonMessageDecoder extends AbstractMessageDecoder {
     }
 
     protected void nonInitialChunk(ReplicationMessageProcessor processor, TypeRegistry typeRegistry,
-                                   final byte[] content)
+                                   final byte[] content, LogSequenceNumber lsn)
             throws IOException, SQLException, InterruptedException {
         byte firstChar = getFirstNonWhiteChar(content);
         // We are receiving changes in chunks
@@ -181,16 +183,16 @@ public class StreamingWal2JsonMessageDecoder extends AbstractMessageDecoder {
         else if (firstChar == COMMA) {
             // following changes, they have an extra comma at the start of message
             if (currentChunk != null) {
-                doProcessMessage(processor, typeRegistry, currentChunk, false);
+                doProcessMessage(processor, typeRegistry, currentChunk, false, lsn);
             }
             replaceFirstNonWhiteChar(content, SPACE);
             currentChunk = content;
         }
         else if (firstChar == RIGHT_BRACKET) {
             // No more changes
-            doProcessMessage(processor, typeRegistry, currentChunk, true);
+            doProcessMessage(processor, typeRegistry, currentChunk, true, lsn);
             messageInProgress = false;
-            processor.process(new TransactionMessage(Operation.COMMIT, txId, commitTime));
+            processor.process(new TransactionMessage(Operation.COMMIT, lsn, txId, commitTime));
         }
         else {
             throw new ConnectException("Chunk arrived in unexpected state");
@@ -250,19 +252,19 @@ public class StreamingWal2JsonMessageDecoder extends AbstractMessageDecoder {
         return (c >= TAB && c <= CR) || c == SPACE;
     }
 
-    private void doProcessMessage(ReplicationMessageProcessor processor, TypeRegistry typeRegistry, byte[] content, boolean lastMessage)
+    private void doProcessMessage(ReplicationMessageProcessor processor, TypeRegistry typeRegistry, byte[] content, boolean lastMessage, LogSequenceNumber lsn)
             throws IOException, SQLException, InterruptedException {
         if (content != null) {
             final Document change = DocumentReader.floatNumbersAsTextReader().read(content);
             LOGGER.trace("Change arrived for decoding {}", change);
-            processor.process(new Wal2JsonReplicationMessage(txId, commitTime, change, containsMetadata, lastMessage, typeRegistry));
+            processor.process(new Wal2JsonReplicationMessage(lsn, txId, commitTime, change, containsMetadata, lastMessage, typeRegistry));
         }
         else {
             // If content is null then this is an empty change event that WAL2JSON can generate for events like DDL,
             // truncate table, materialized views, etc. The transaction still needs to be processed for the heartbeat
             // to fire.
             LOGGER.trace("Empty change arrived");
-            processor.process(new NoopMessage(txId, commitTime));
+            processor.process(new NoopMessage(lsn, txId, commitTime));
         }
 
     }

@@ -13,6 +13,7 @@ import java.util.regex.Matcher;
 
 import org.apache.kafka.connect.data.Field;
 import org.apache.kafka.connect.errors.ConnectException;
+import org.postgresql.replication.LogSequenceNumber;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,6 +37,7 @@ class Wal2JsonReplicationMessage implements ReplicationMessage {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(Wal2JsonReplicationMessage.class);
 
+    private final LogSequenceNumber lsn;
     private final long txId;
     private final Instant commitTime;
     private final Document rawMessage;
@@ -43,7 +45,9 @@ class Wal2JsonReplicationMessage implements ReplicationMessage {
     private final boolean lastEventForLsn;
     private final TypeRegistry typeRegistry;
 
-    public Wal2JsonReplicationMessage(long txId, Instant commitTime, Document rawMessage, boolean hasMetadata, boolean lastEventForLsn, TypeRegistry typeRegistry) {
+    public Wal2JsonReplicationMessage(LogSequenceNumber lsn, long txId, Instant commitTime, Document rawMessage, boolean hasMetadata, boolean lastEventForLsn,
+                                      TypeRegistry typeRegistry) {
+        this.lsn = lsn;
         this.txId = txId;
         this.commitTime = commitTime;
         this.rawMessage = rawMessage;
@@ -65,6 +69,11 @@ class Wal2JsonReplicationMessage implements ReplicationMessage {
         }
         throw new IllegalArgumentException(
                 "Unknown operation '" + operation + "' in replication stream message");
+    }
+
+    @Override
+    public LogSequenceNumber getLsn() {
+        return lsn;
     }
 
     @Override

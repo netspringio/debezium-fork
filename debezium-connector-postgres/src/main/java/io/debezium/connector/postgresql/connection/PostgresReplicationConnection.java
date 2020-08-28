@@ -16,10 +16,13 @@ import java.sql.Statement;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -38,6 +41,7 @@ import org.slf4j.LoggerFactory;
 
 import io.debezium.DebeziumException;
 import io.debezium.config.Configuration;
+import io.debezium.connector.base.ChangeEventQueue;
 import io.debezium.connector.postgresql.PostgresConnectorConfig;
 import io.debezium.connector.postgresql.PostgresSchema;
 import io.debezium.connector.postgresql.TypeRegistry;
@@ -71,6 +75,10 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
     private final MessageDecoder messageDecoder;
     private final TypeRegistry typeRegistry;
     private final Properties streamParams;
+    private final ChangeEventQueue<RawReplicationMessage> receiveQueue;
+    private final int receiveQueueParallelism;
+    private ThreadPoolExecutor processorThreadPool;
+    private AtomicLong nextProcessedSeq = new AtomicLong(0L);
 
     private long defaultStartingPos;
     private SlotCreationResult slotCreationInfo;
@@ -107,7 +115,9 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
                                           Duration statusUpdateInterval,
                                           TypeRegistry typeRegistry,
                                           Properties streamParams,
-                                          PostgresSchema schema) {
+                                          PostgresSchema schema,
+                                          ChangeEventQueue<RawReplicationMessage> receiveQueue,
+                                          int receiveQueueParallelism) {
         super(config, PostgresConnection.FACTORY, null, PostgresReplicationConnection::defaultSettings);
 
         this.originalConfig = config;
@@ -122,6 +132,8 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
         this.messageDecoder = plugin.messageDecoder(new MessageDecoderConfig(config, schema, publicationName, exportSnapshot, doSnapshot));
         this.typeRegistry = typeRegistry;
         this.streamParams = streamParams;
+        this.receiveQueue = receiveQueue;
+        this.receiveQueueParallelism = receiveQueueParallelism;
         this.slotCreationInfo = null;
         this.hasInitedSlot = false;
     }
@@ -364,6 +376,34 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
         }
     }
 
+    private void waitForSequence(long seqNo) throws InterruptedException {
+        // Fast path.
+        if (nextProcessedSeq.get() == seqNo) {
+            return;
+        }
+        // Slow path.
+        synchronized (nextProcessedSeq) {
+            while (nextProcessedSeq.get() != seqNo) {
+                try {
+                    // We don't need a timeout here. This thread will either by notified
+                    // by another thread or interrupted by close().
+                    nextProcessedSeq.wait();
+                }
+                catch (InterruptedException ex) {
+                    LOGGER.warn("Sequence interrupted: local={} global={}", seqNo, nextProcessedSeq.get());
+                    throw ex;
+                }
+            }
+        }
+    }
+
+    private void incSequence(long inc) {
+        synchronized (nextProcessedSeq) {
+            nextProcessedSeq.set(nextProcessedSeq.get() + inc);
+            nextProcessedSeq.notifyAll();
+        }
+    }
+
     protected BaseConnection pgConnection() throws SQLException {
         return (BaseConnection) connection(false);
     }
@@ -445,50 +485,112 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
             private ExecutorService keepAliveExecutor = null;
             private AtomicBoolean keepAliveRunning;
             private final Metronome metronome = Metronome.sleeper(statusUpdateInterval, Clock.SYSTEM);
-
-            // make sure this is volatile since multiple threads may be interested in this value
-            private volatile LogSequenceNumber lastReceivedLsn;
+            private ReplicationMessageProcessor processor;
+            private long nextSeq = 0;
 
             @Override
-            public void read(ReplicationMessageProcessor processor) throws SQLException, InterruptedException {
-                ByteBuffer read = stream.read();
-                final long lastReceiveLsn = stream.getLastReceiveLSN().asLong();
-                LOGGER.trace("Streaming requested from LSN {}, received LSN {}", startingLsn, lastReceiveLsn);
-                if (messageDecoder.shouldMessageBeSkipped(read, lastReceiveLsn, startingLsn, skipFirstFlushRecord)) {
-                    return;
+            public void init(ReplicationMessageProcessor processor) {
+                this.processor = processor;
+                LOGGER.info("Starting processing threads = {}", receiveQueueParallelism);
+                processorThreadPool = new ThreadPoolExecutor(
+                        receiveQueueParallelism, receiveQueueParallelism, 0, TimeUnit.MILLISECONDS,
+                        new LinkedBlockingQueue());
+                for (int i = 0; i < receiveQueueParallelism; i++) {
+                    processorThreadPool.execute(() -> {
+                        LOGGER.info("Starting thread to process from receive queue");
+                        while (true) {
+                            List<RawReplicationMessage> records;
+                            try {
+                                records = receiveQueue.poll();
+                            }
+                            catch (InterruptedException ex) {
+                                LOGGER.warn("Processor thread interrupted, stopping");
+                                break;
+                            }
+                            if (records.isEmpty()) {
+                                continue;
+                            }
+                            BufferingChangeEventQueue.startBuffering();
+                            for (RawReplicationMessage msg : records) {
+                                try {
+                                    deserializeMessages(msg);
+                                }
+                                catch (InterruptedException ex) {
+                                    LOGGER.warn("Processor thread interrupted, stopping");
+                                    break;
+                                }
+                                catch (SQLException ex) {
+                                    // We cannot simply ignore this failure and move to the next message
+                                    // as that may violate ordering and exactly-once semantics.
+                                    LOGGER.warn("Processor thread exception:", ex);
+                                    throw new RuntimeException("Exception in reading from stream: " + ex.getMessage());
+                                }
+                            }
+                            long beginSeq = records.get(0).getSeq();
+                            try {
+                                waitForSequence(beginSeq);
+                                BufferingChangeEventQueue.endBuffering();
+                            }
+                            catch (InterruptedException ex) {
+                                break;
+                            }
+                            incSequence(records.size());
+                            LOGGER.info("Processed {} messages from receive queue", records.size());
+                            records.clear();
+                        }
+                    });
                 }
-                deserializeMessages(read, processor);
             }
 
             @Override
-            public boolean readPending(ReplicationMessageProcessor processor) throws SQLException, InterruptedException {
+            public void read(ReplicationMessageProcessor processor) throws SQLException, InterruptedException {
+                this.processor = processor;
+                read();
+            }
+
+            @Override
+            public void read() throws SQLException, InterruptedException {
+                ByteBuffer read = stream.read();
+                final LogSequenceNumber lastReceiveLsn = stream.getLastReceiveLSN();
+                LOGGER.trace("Streaming requested from LSN {}, received LSN {}", startingLsn, lastReceiveLsn.asLong());
+                if (messageDecoder.shouldMessageBeSkipped(
+                        read, lastReceiveLsn.asLong(), startingLsn, skipFirstFlushRecord)) {
+                    return;
+                }
+                receiveQueue.enqueue(new RawReplicationMessage(read, lastReceiveLsn, nextSeq++));
+            }
+
+            @Override
+            public boolean readPending() throws SQLException, InterruptedException {
                 ByteBuffer read = stream.readPending();
-                final long lastReceiveLsn = stream.getLastReceiveLSN().asLong();
+                LogSequenceNumber lastReceiveLsn = stream.getLastReceiveLSN();
                 LOGGER.trace("Streaming requested from LSN {}, received LSN {}", startingLsn, lastReceiveLsn);
 
                 if (read == null) {
                     return false;
                 }
 
-                if (messageDecoder.shouldMessageBeSkipped(read, lastReceiveLsn, startingLsn, skipFirstFlushRecord)) {
+                if (messageDecoder.shouldMessageBeSkipped(
+                        read, lastReceiveLsn.asLong(), startingLsn, skipFirstFlushRecord)) {
                     return true;
                 }
 
-                deserializeMessages(read, processor);
-
+                receiveQueue.enqueue(new RawReplicationMessage(read, lastReceiveLsn, nextSeq++));
                 return true;
             }
 
-            private void deserializeMessages(ByteBuffer buffer, ReplicationMessageProcessor processor) throws SQLException, InterruptedException {
-                lastReceivedLsn = stream.getLastReceiveLSN();
-                LOGGER.trace("Received message at LSN {}", lastReceivedLsn);
-                messageDecoder.processMessage(buffer, processor, typeRegistry);
+            private void deserializeMessages(RawReplicationMessage msg) throws SQLException, InterruptedException {
+                LOGGER.trace("Received message at LSN {}", msg.getLsn());
+                messageDecoder.processMessage(msg.getBuffer(), msg.getLsn(), processor, typeRegistry);
             }
 
             @Override
             public void close() throws SQLException {
                 processWarnings(true);
                 stream.close();
+                // Shutdown immediately to reduce the likelihood of the threadpool still
+                // running if the connector is immediately restarted.
+                processorThreadPool.shutdownNow();
             }
 
             @Override
@@ -505,7 +607,9 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
 
             @Override
             public Long lastReceivedLsn() {
-                return lastReceivedLsn != null ? lastReceivedLsn.asLong() : null;
+                // This is no longer supported. Perhaps we could change its meaning to truly represent
+                // last received LSN while allowing out-of-order processing of messages.
+                return 0L;
             }
 
             @Override
@@ -627,6 +731,8 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
         private TypeRegistry typeRegistry;
         private PostgresSchema schema;
         private Properties slotStreamParams = new Properties();
+        private ChangeEventQueue<RawReplicationMessage> receiveQueue;
+        private int receiveQueueParallelism = DEFAULT_PROCESSING_PARALLELISM;
 
         protected ReplicationConnectionBuilder(Configuration config) {
             assert config != null;
@@ -714,7 +820,7 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
         public ReplicationConnection build() {
             assert plugin != null : "Decoding plugin name is not set";
             return new PostgresReplicationConnection(config, slotName, publicationName, tableFilter, publicationAutocreateMode, plugin, dropSlotOnClose, exportSnapshot,
-                    doSnapshot, statusUpdateIntervalVal, typeRegistry, slotStreamParams, schema);
+                    doSnapshot, statusUpdateIntervalVal, typeRegistry, slotStreamParams, schema, receiveQueue, receiveQueueParallelism);
         }
 
         @Override
@@ -726,6 +832,18 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
         @Override
         public Builder withSchema(PostgresSchema schema) {
             this.schema = schema;
+            return this;
+        }
+
+        @Override
+        public Builder withReceiveQueue(final ChangeEventQueue<RawReplicationMessage> receiveQueue) {
+            this.receiveQueue = receiveQueue;
+            return this;
+        }
+
+        @Override
+        public Builder withReceiveQueueParallelism(final int receiveQueueParallelism) {
+            this.receiveQueueParallelism = receiveQueueParallelism;
             return this;
         }
     }

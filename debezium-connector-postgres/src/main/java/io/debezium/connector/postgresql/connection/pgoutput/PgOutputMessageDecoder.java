@@ -23,6 +23,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import org.postgresql.replication.LogSequenceNumber;
 import org.postgresql.replication.fluent.logical.ChainedLogicalStreamBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -159,7 +160,8 @@ public class PgOutputMessageDecoder extends AbstractMessageDecoder {
     }
 
     @Override
-    public void processNotEmptyMessage(ByteBuffer buffer, ReplicationMessageProcessor processor, TypeRegistry typeRegistry) throws SQLException, InterruptedException {
+    public void processNotEmptyMessage(ByteBuffer buffer, LogSequenceNumber lsn, ReplicationMessageProcessor processor, TypeRegistry typeRegistry)
+            throws SQLException, InterruptedException {
         if (LOGGER.isTraceEnabled()) {
             if (!buffer.hasArray()) {
                 throw new IllegalStateException("Invalid buffer received from PG server during streaming replication");
@@ -176,22 +178,22 @@ public class PgOutputMessageDecoder extends AbstractMessageDecoder {
         final MessageType messageType = MessageType.forType((char) buffer.get());
         switch (messageType) {
             case BEGIN:
-                handleBeginMessage(buffer, processor);
+                handleBeginMessage(buffer, processor, lsn);
                 break;
             case COMMIT:
-                handleCommitMessage(buffer, processor);
+                handleCommitMessage(buffer, processor, lsn);
                 break;
             case RELATION:
                 handleRelationMessage(buffer, typeRegistry);
                 break;
             case INSERT:
-                decodeInsert(buffer, typeRegistry, processor);
+                decodeInsert(buffer, lsn, typeRegistry, processor);
                 break;
             case UPDATE:
-                decodeUpdate(buffer, typeRegistry, processor);
+                decodeUpdate(buffer, lsn, typeRegistry, processor);
                 break;
             case DELETE:
-                decodeDelete(buffer, typeRegistry, processor);
+                decodeDelete(buffer, lsn, typeRegistry, processor);
                 break;
             default:
                 LOGGER.trace("Message Type {} skipped, not processed.", messageType);
@@ -216,7 +218,7 @@ public class PgOutputMessageDecoder extends AbstractMessageDecoder {
      * @param buffer The replication stream buffer
      * @param processor The replication message processor
      */
-    private void handleBeginMessage(ByteBuffer buffer, ReplicationMessageProcessor processor) throws SQLException, InterruptedException {
+    private void handleBeginMessage(ByteBuffer buffer, ReplicationMessageProcessor processor, LogSequenceNumber streamLsn) throws SQLException, InterruptedException {
         long lsn = buffer.getLong(); // LSN
         this.commitTimestamp = PG_EPOCH.plus(buffer.getLong(), ChronoUnit.MICROS);
         this.transactionId = buffer.getInt();
@@ -224,7 +226,7 @@ public class PgOutputMessageDecoder extends AbstractMessageDecoder {
         LOGGER.trace("Final LSN of transaction: {}", lsn);
         LOGGER.trace("Commit timestamp of transaction: {}", commitTimestamp);
         LOGGER.trace("XID of transaction: {}", transactionId);
-        processor.process(new TransactionMessage(Operation.BEGIN, transactionId, commitTimestamp));
+        processor.process(new TransactionMessage(Operation.BEGIN, streamLsn, transactionId, commitTimestamp));
     }
 
     /**
@@ -233,7 +235,7 @@ public class PgOutputMessageDecoder extends AbstractMessageDecoder {
      * @param buffer The replication stream buffer
      * @param processor The replication message processor
      */
-    private void handleCommitMessage(ByteBuffer buffer, ReplicationMessageProcessor processor) throws SQLException, InterruptedException {
+    private void handleCommitMessage(ByteBuffer buffer, ReplicationMessageProcessor processor, LogSequenceNumber streamLsn) throws SQLException, InterruptedException {
         int flags = buffer.get(); // flags, currently unused
         long lsn = buffer.getLong(); // LSN of the commit
         long endLsn = buffer.getLong(); // End LSN of the transaction
@@ -243,7 +245,7 @@ public class PgOutputMessageDecoder extends AbstractMessageDecoder {
         LOGGER.trace("Commit LSN: {}", lsn);
         LOGGER.trace("End LSN of transaction: {}", endLsn);
         LOGGER.trace("Commit timestamp of transaction: {}", commitTimestamp);
-        processor.process(new TransactionMessage(Operation.COMMIT, transactionId, commitTimestamp));
+        processor.process(new TransactionMessage(Operation.COMMIT, streamLsn, transactionId, commitTimestamp));
     }
 
     /**
@@ -359,7 +361,8 @@ public class PgOutputMessageDecoder extends AbstractMessageDecoder {
      * @param typeRegistry The postgres type registry
      * @param processor The replication message processor
      */
-    private void decodeInsert(ByteBuffer buffer, TypeRegistry typeRegistry, ReplicationMessageProcessor processor) throws SQLException, InterruptedException {
+    private void decodeInsert(ByteBuffer buffer, LogSequenceNumber lsn, TypeRegistry typeRegistry, ReplicationMessageProcessor processor)
+            throws SQLException, InterruptedException {
         int relationId = buffer.getInt();
         char tupleType = (char) buffer.get(); // Always 'N" for inserts
 
@@ -369,7 +372,7 @@ public class PgOutputMessageDecoder extends AbstractMessageDecoder {
 
         // non-captured table
         if (!resolvedTable.isPresent()) {
-            processor.process(new NoopMessage(transactionId, commitTimestamp));
+            processor.process(new NoopMessage(lsn, transactionId, commitTimestamp));
         }
         else {
             Table table = resolvedTable.get();
@@ -377,6 +380,7 @@ public class PgOutputMessageDecoder extends AbstractMessageDecoder {
             processor.process(new PgOutputReplicationMessage(
                     Operation.INSERT,
                     table.id().toDoubleQuotedString(),
+                    lsn,
                     commitTimestamp,
                     transactionId,
                     null,
@@ -391,7 +395,8 @@ public class PgOutputMessageDecoder extends AbstractMessageDecoder {
      * @param typeRegistry The postgres type registry
      * @param processor The replication message processor
      */
-    private void decodeUpdate(ByteBuffer buffer, TypeRegistry typeRegistry, ReplicationMessageProcessor processor) throws SQLException, InterruptedException {
+    private void decodeUpdate(ByteBuffer buffer, LogSequenceNumber lsn, TypeRegistry typeRegistry, ReplicationMessageProcessor processor)
+            throws SQLException, InterruptedException {
         int relationId = buffer.getInt();
 
         LOGGER.trace("Event: {}, RelationId: {}", MessageType.UPDATE, relationId);
@@ -400,7 +405,7 @@ public class PgOutputMessageDecoder extends AbstractMessageDecoder {
 
         // non-captured table
         if (!resolvedTable.isPresent()) {
-            processor.process(new NoopMessage(transactionId, commitTimestamp));
+            processor.process(new NoopMessage(lsn, transactionId, commitTimestamp));
         }
         else {
             Table table = resolvedTable.get();
@@ -424,6 +429,7 @@ public class PgOutputMessageDecoder extends AbstractMessageDecoder {
             processor.process(new PgOutputReplicationMessage(
                     Operation.UPDATE,
                     table.id().toDoubleQuotedString(),
+                    lsn,
                     commitTimestamp,
                     transactionId,
                     oldColumns,
@@ -438,7 +444,8 @@ public class PgOutputMessageDecoder extends AbstractMessageDecoder {
      * @param typeRegistry The postgres type registry
      * @param processor The replication message processor
      */
-    private void decodeDelete(ByteBuffer buffer, TypeRegistry typeRegistry, ReplicationMessageProcessor processor) throws SQLException, InterruptedException {
+    private void decodeDelete(ByteBuffer buffer, LogSequenceNumber lsn, TypeRegistry typeRegistry, ReplicationMessageProcessor processor)
+            throws SQLException, InterruptedException {
         int relationId = buffer.getInt();
 
         char tupleType = (char) buffer.get();
@@ -449,7 +456,7 @@ public class PgOutputMessageDecoder extends AbstractMessageDecoder {
 
         // non-captured table
         if (!resolvedTable.isPresent()) {
-            processor.process(new NoopMessage(transactionId, commitTimestamp));
+            processor.process(new NoopMessage(lsn, transactionId, commitTimestamp));
         }
         else {
             Table table = resolvedTable.get();
@@ -457,6 +464,7 @@ public class PgOutputMessageDecoder extends AbstractMessageDecoder {
             processor.process(new PgOutputReplicationMessage(
                     Operation.DELETE,
                     table.id().toDoubleQuotedString(),
+                    lsn,
                     commitTimestamp,
                     transactionId,
                     columns,

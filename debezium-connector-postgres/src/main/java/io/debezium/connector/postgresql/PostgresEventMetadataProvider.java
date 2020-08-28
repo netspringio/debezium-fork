@@ -25,7 +25,8 @@ class PostgresEventMetadataProvider implements EventMetadataProvider {
             return null;
         }
         final Struct sourceInfo = value.getStruct(Envelope.FieldName.SOURCE);
-        if (source == null) {
+        // This check used to be "if (source == null)", perhaps that was a bug?
+        if (sourceInfo == null) {
             return null;
         }
         if (sourceInfo.schema().field(SourceInfo.TIMESTAMP_USEC_KEY) != null) {
@@ -42,7 +43,8 @@ class PostgresEventMetadataProvider implements EventMetadataProvider {
             return null;
         }
         final Struct sourceInfo = value.getStruct(Envelope.FieldName.SOURCE);
-        if (source == null) {
+        // This check used to be "if (source == null)", perhaps that was a bug?
+        if (sourceInfo == null) {
             return null;
         }
         Long xmin = sourceInfo.getInt64(SourceInfo.XMIN_KEY);
@@ -61,7 +63,8 @@ class PostgresEventMetadataProvider implements EventMetadataProvider {
             return null;
         }
         final Struct sourceInfo = value.getStruct(Envelope.FieldName.SOURCE);
-        if (source == null) {
+        // This check used to be "if (source == null)", perhaps that was a bug?
+        if (sourceInfo == null) {
             return null;
         }
         return Long.toString(sourceInfo.getInt64(SourceInfo.TXID_KEY));
