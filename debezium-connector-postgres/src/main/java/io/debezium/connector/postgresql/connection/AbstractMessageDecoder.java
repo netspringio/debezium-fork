@@ -8,6 +8,7 @@ package io.debezium.connector.postgresql.connection;
 import java.nio.ByteBuffer;
 import java.sql.SQLException;
 
+import org.postgresql.replication.LogSequenceNumber;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -33,17 +34,18 @@ public abstract class AbstractMessageDecoder implements MessageDecoder {
     }
 
     @Override
-    public void processMessage(ByteBuffer buffer, ReplicationMessageProcessor processor, TypeRegistry typeRegistry) throws SQLException, InterruptedException {
+    public void processMessage(ByteBuffer buffer, LogSequenceNumber lsn, ReplicationMessageProcessor processor, TypeRegistry typeRegistry)
+            throws SQLException, InterruptedException {
         // if message is empty pass control right to ReplicationMessageProcessor to update WAL position info
         if (buffer == null) {
             processor.process(null);
         }
         else {
-            processNotEmptyMessage(buffer, processor, typeRegistry);
+            processNotEmptyMessage(buffer, lsn, processor, typeRegistry);
         }
     }
 
-    protected abstract void processNotEmptyMessage(ByteBuffer buffer, ReplicationMessageProcessor processor, TypeRegistry typeRegistry)
+    protected abstract void processNotEmptyMessage(ByteBuffer buffer, LogSequenceNumber lsn, ReplicationMessageProcessor processor, TypeRegistry typeRegistry)
             throws SQLException, InterruptedException;
 
     @Override

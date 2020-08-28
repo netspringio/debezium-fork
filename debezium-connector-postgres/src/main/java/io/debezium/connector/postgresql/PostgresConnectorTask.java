@@ -23,7 +23,9 @@ import io.debezium.config.Field;
 import io.debezium.connector.base.ChangeEventQueue;
 import io.debezium.connector.common.BaseSourceTask;
 import io.debezium.connector.postgresql.connection.PostgresConnection;
+import io.debezium.connector.postgresql.connection.RawReplicationMessage;
 import io.debezium.connector.postgresql.connection.ReplicationConnection;
+import io.debezium.connector.postgresql.metrics.PostgresChangeEventSourceMetricsFactory;
 import io.debezium.connector.postgresql.spi.SlotCreationResult;
 import io.debezium.connector.postgresql.spi.SlotState;
 import io.debezium.connector.postgresql.spi.Snapshotter;
@@ -32,7 +34,6 @@ import io.debezium.pipeline.ChangeEventSourceCoordinator;
 import io.debezium.pipeline.DataChangeEvent;
 import io.debezium.pipeline.ErrorHandler;
 import io.debezium.pipeline.EventDispatcher;
-import io.debezium.pipeline.metrics.DefaultChangeEventSourceMetricsFactory;
 import io.debezium.relational.TableId;
 import io.debezium.schema.TopicSelector;
 import io.debezium.util.Clock;
@@ -52,6 +53,7 @@ public class PostgresConnectorTask extends BaseSourceTask {
 
     private volatile PostgresTaskContext taskContext;
     private volatile ChangeEventQueue<DataChangeEvent> queue;
+    private volatile ChangeEventQueue<RawReplicationMessage> receiveQueue;
     private volatile PostgresConnection jdbcConnection;
     private volatile PostgresConnection heartbeatConnection;
     private volatile ErrorHandler errorHandler;
@@ -81,9 +83,16 @@ public class PostgresConnectorTask extends BaseSourceTask {
         final TypeRegistry typeRegistry = jdbcConnection.getTypeRegistry();
         final Charset databaseCharset = jdbcConnection.getDatabaseCharset();
 
+        this.receiveQueue = new ChangeEventQueue.Builder<RawReplicationMessage>()
+                .pollInterval(connectorConfig.getReceiveQueuePollInterval())
+                .maxBatchSize(connectorConfig.getMaxReceiveQueueBatchSize())
+                .maxQueueSize(connectorConfig.getMaxReceiveQueueSize())
+                .loggingContextSupplier(() -> taskContext.configureLoggingContext(CONTEXT_NAME))
+                .build();
+
         schema = new PostgresSchema(connectorConfig, typeRegistry, databaseCharset, topicSelector);
-        this.taskContext = new PostgresTaskContext(connectorConfig, schema, topicSelector);
-        final PostgresOffsetContext previousOffset = (PostgresOffsetContext) getPreviousOffset(new PostgresOffsetContext.Loader(connectorConfig));
+        this.taskContext = new PostgresTaskContext(connectorConfig, schema, topicSelector, receiveQueue);
+        PostgresOffsetContext previousOffset = (PostgresOffsetContext) getPreviousOffset(new PostgresOffsetContext.Loader(connectorConfig));
         final Clock clock = Clock.system();
 
         LoggingContext.PreviousContext previousContext = taskContext.configureLoggingContext(CONTEXT_NAME);
@@ -186,7 +195,7 @@ public class PostgresConnectorTask extends BaseSourceTask {
                             taskContext,
                             replicationConnection,
                             slotCreatedInfo),
-                    new DefaultChangeEventSourceMetricsFactory(),
+                    new PostgresChangeEventSourceMetricsFactory(this.receiveQueue),
                     dispatcher,
                     schema);
 
@@ -254,6 +263,11 @@ public class PostgresConnectorTask extends BaseSourceTask {
         if (schema != null) {
             schema.close();
         }
+    }
+
+    @Override
+    synchronized public void commit() throws InterruptedException {
+        super.commit();
     }
 
     @Override

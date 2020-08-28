@@ -42,7 +42,7 @@ class PostgresEventMetadataProvider implements EventMetadataProvider {
             return null;
         }
         final Struct sourceInfo = value.getStruct(Envelope.FieldName.SOURCE);
-        if (source == null) {
+        if (sourceInfo == null) {
             return null;
         }
         Long xmin = sourceInfo.getInt64(SourceInfo.XMIN_KEY);
@@ -61,7 +61,7 @@ class PostgresEventMetadataProvider implements EventMetadataProvider {
             return null;
         }
         final Struct sourceInfo = value.getStruct(Envelope.FieldName.SOURCE);
-        if (source == null) {
+        if (sourceInfo == null) {
             return null;
         }
         return Long.toString(sourceInfo.getInt64(SourceInfo.TXID_KEY));

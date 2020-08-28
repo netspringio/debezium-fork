@@ -7,6 +7,7 @@
 package io.debezium.connector.postgresql;
 
 import java.time.Duration;
+import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -906,10 +907,41 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
                     "the original value is a toasted value not provided by the database. " +
                     "If starts with 'hex:' prefix it is expected that the rest of the string repesents hexadecimally encoded octets.");
 
+    public static final Field MAX_RECEIVE_QUEUE_SIZE = Field.create("max.receive.queue.size")
+            .withDisplayName("Receive queue buffer size")
+            .withType(Type.INT)
+            .withWidth(Width.SHORT)
+            .withDefault(524_288);
+
+    public static final Field MAX_RECEIVE_QUEUE_BATCH_SIZE = Field.create("max.receive.queue.batch.size")
+            .withDisplayName("Receive queue batch size")
+            .withType(Type.INT)
+            .withWidth(Width.SHORT)
+            .withDefault(32_768)
+            .withValidation(Field::isPositiveInteger);
+
+    public static final Field RECEIVE_QUEUE_POLL_INTERVAL_MS = Field.create("receive.queue.poll.interval.ms")
+            .withDisplayName("Receive Queue Poll interval (ms)")
+            .withType(Type.LONG)
+            .withWidth(Width.SHORT)
+            .withDefault(10_000)
+            .withValidation(Field::isPositiveInteger);
+
+    public static final Field NUM_PROCESSING_THREADS = Field.create("num.processing.threads")
+        .withDisplayName("Number of processing threads")
+        .withType(Type.INT)
+        .withWidth(Width.SHORT)
+        .withDefault(32)
+        .withValidation(Field::isPositiveInteger);
+
     private final HStoreHandlingMode hStoreHandlingMode;
     private final IntervalHandlingMode intervalHandlingMode;
     private final SnapshotMode snapshotMode;
     private final SchemaRefreshMode schemaRefreshMode;
+    private final int maxReceiveQueueSize;
+    private final int maxReceiveQueueBatchSize;
+    private final Duration receiveQueuePollInterval;
+    private final int numProcessingThreads;
 
     public PostgresConnectorConfig(Configuration config) {
         super(
@@ -925,6 +957,10 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
         this.intervalHandlingMode = IntervalHandlingMode.parse(config.getString(PostgresConnectorConfig.INTERVAL_HANDLING_MODE));
         this.snapshotMode = SnapshotMode.parse(config.getString(SNAPSHOT_MODE));
         this.schemaRefreshMode = SchemaRefreshMode.parse(config.getString(SCHEMA_REFRESH_MODE));
+        this.maxReceiveQueueSize = config.getInteger(MAX_RECEIVE_QUEUE_SIZE);
+        this.maxReceiveQueueBatchSize = config.getInteger(MAX_RECEIVE_QUEUE_BATCH_SIZE);
+        this.receiveQueuePollInterval = config.getDuration(RECEIVE_QUEUE_POLL_INTERVAL_MS, ChronoUnit.MILLIS);
+        this.numProcessingThreads = config.getInteger(NUM_PROCESSING_THREADS);
     }
 
     protected String hostname() {
@@ -1041,6 +1077,22 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
             return Strings.hexStringToByteArray(placeholder.substring(4));
         }
         return placeholder.getBytes();
+    }
+
+    public int getMaxReceiveQueueSize() {
+        return maxReceiveQueueSize;
+    }
+
+    public int getMaxReceiveQueueBatchSize() {
+        return maxReceiveQueueBatchSize;
+    }
+
+    public Duration getReceiveQueuePollInterval() {
+        return receiveQueuePollInterval;
+    }
+
+    public int getNumProcessingThreads() {
+        return numProcessingThreads;
     }
 
     @Override

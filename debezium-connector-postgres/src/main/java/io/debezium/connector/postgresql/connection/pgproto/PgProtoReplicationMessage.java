@@ -12,6 +12,7 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import org.postgresql.replication.LogSequenceNumber;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -58,6 +59,11 @@ class PgProtoReplicationMessage implements ReplicationMessage {
         }
         throw new IllegalArgumentException(
                 "Unknown operation '" + rawMessage.getOp() + "' in replication stream message");
+    }
+
+    @Override
+    public LogSequenceNumber getLsn() {
+        return null;
     }
 
     @Override

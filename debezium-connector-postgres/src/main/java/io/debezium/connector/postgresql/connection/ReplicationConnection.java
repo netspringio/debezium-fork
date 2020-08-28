@@ -15,6 +15,7 @@ import org.postgresql.replication.PGReplicationStream;
 
 import io.debezium.annotation.NotThreadSafe;
 import io.debezium.config.Configuration;
+import io.debezium.connector.base.ChangeEventQueue;
 import io.debezium.connector.postgresql.PostgresConnectorConfig;
 import io.debezium.connector.postgresql.PostgresSchema;
 import io.debezium.connector.postgresql.TypeRegistry;
@@ -212,6 +213,8 @@ public interface ReplicationConnection extends AutoCloseable {
          * @return this instance
          */
         Builder doSnapshot(final boolean doSnapshot);
+
+        Builder withQueue(final ChangeEventQueue<RawReplicationMessage> receiveQueue);
 
         /**
          * Creates a new {@link ReplicationConnection} instance

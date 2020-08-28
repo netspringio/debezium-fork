@@ -28,27 +28,36 @@ public interface ReplicationStream extends AutoCloseable {
         void process(ReplicationMessage message) throws SQLException, InterruptedException;
     }
 
+    void init(ReplicationMessageProcessor processor);
+
     /**
      * Blocks and waits for a replication message to be sent over a replication connection. Once a message has been received,
      * the value of the {@link #lastReceivedLsn() last received LSN} will also be updated accordingly.
      *
-     * @param processor - a callback to which the arrived message is passed
      * @throws SQLException if anything unexpected fails
      * @see PGReplicationStream#read()
      */
     void read(ReplicationMessageProcessor processor) throws SQLException, InterruptedException;
 
     /**
+     * Blocks and waits for a replication message to be sent over a replication connection. Once a message has been received,
+     * the value of the {@link #lastReceivedLsn() last received LSN} will also be updated accordingly.
+     *
+     * @throws SQLException if anything unexpected fails
+     * @see PGReplicationStream#read()
+     */
+    void read() throws SQLException, InterruptedException;
+
+    /**
      * Attempts to read a replication message from a replication connection, processing that message if it's available or returning
      * {@code false} if nothing is available. Once a message has been received, the value of the {@link #lastReceivedLsn() last received LSN}
      * will also be updated accordingly.
      *
-     * @param processor - a callback to which the arrived message is passed
      * @return {@code true} if a message was received and processed
      * @throws SQLException if anything unexpected fails
      * @see PGReplicationStream#readPending()
      */
-    boolean readPending(ReplicationMessageProcessor processor) throws SQLException, InterruptedException;
+    boolean readPending() throws SQLException, InterruptedException;
 
     /**
      * Sends a message to the server informing it about that latest position in the WAL that has successfully been
