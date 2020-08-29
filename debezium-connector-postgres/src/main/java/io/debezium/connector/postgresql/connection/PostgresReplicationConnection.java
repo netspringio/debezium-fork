@@ -457,6 +457,7 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
             // make sure this is volatile since multiple threads may be interested in this value
             private volatile LogSequenceNumber currentlyProcessingLsn;
             private ReplicationMessageProcessor processor;
+            private long nextSeq = 0;
 
             @Override
             public void init(ReplicationMessageProcessor processor) {
@@ -478,11 +479,15 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
                                 }
                                 for (RawReplicationMessage msg : records) {
                                     try {
+                                        msg.beginProcessing();
                                         deserializeMessages(msg);
                                     }
                                     catch (SQLException | InterruptedException ex) {
                                         LOGGER.warn("Exception in processing message:", ex);
                                         throw new RuntimeException("Exception in reading from stream: " + ex.getMessage());
+                                    }
+                                    finally {
+                                        msg.endProcessing();
                                     }
                                 }
                                 if (records.size() > 0) {
@@ -510,7 +515,7 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
                         read, lastReceiveLsn.asLong(), startingLsn, skipFirstFlushRecord)) {
                     return;
                 }
-                receiveQueue.enqueue(new RawReplicationMessage(read, lastReceiveLsn));
+                receiveQueue.enqueue(new RawReplicationMessage(read, lastReceiveLsn, nextSeq++));
             }
 
             @Override
@@ -528,7 +533,7 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
                     return true;
                 }
 
-                receiveQueue.enqueue(new RawReplicationMessage(read, lastReceiveLsn));
+                receiveQueue.enqueue(new RawReplicationMessage(read, lastReceiveLsn, nextSeq++));
                 return true;
             }
 

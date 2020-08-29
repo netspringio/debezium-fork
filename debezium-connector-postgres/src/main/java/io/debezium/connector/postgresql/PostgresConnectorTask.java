@@ -58,6 +58,7 @@ public class PostgresConnectorTask extends BaseSourceTask {
     private volatile PostgresConnection heartbeatConnection;
     private volatile ErrorHandler errorHandler;
     private volatile PostgresSchema schema;
+    private volatile long nextSeq;
 
     @Override
     public ChangeEventSourceCoordinator start(Configuration config) {
@@ -94,6 +95,7 @@ public class PostgresConnectorTask extends BaseSourceTask {
         this.taskContext = new PostgresTaskContext(connectorConfig, schema, topicSelector, receiveQueue);
         PostgresOffsetContext previousOffset = (PostgresOffsetContext) getPreviousOffset(new PostgresOffsetContext.Loader(connectorConfig));
         final Clock clock = Clock.system();
+        this.nextSeq = 0;
 
         LoggingContext.PreviousContext previousContext = taskContext.configureLoggingContext(CONTEXT_NAME);
         try {
@@ -173,7 +175,7 @@ public class PostgresConnectorTask extends BaseSourceTask {
                     schema,
                     queue,
                     connectorConfig.getTableFilters().dataCollectionFilter(),
-                    DataChangeEvent::new,
+                    SerializingChangeEvent::new,
                     PostgresChangeRecordEmitter::updateSchema,
                     metadataProvider,
                     heartbeat,
@@ -277,5 +279,29 @@ public class PostgresConnectorTask extends BaseSourceTask {
 
     public PostgresTaskContext getTaskContext() {
         return taskContext;
+    }
+
+    public class SerializingChangeEvent extends DataChangeEvent {
+
+        public SerializingChangeEvent(SourceRecord record) {
+            super(record);
+        }
+
+        @Override
+        public SourceRecord getRecord() {
+            long recordSeq = RawReplicationMessage.getThreadLocal().getSeq();
+            synchronized (PostgresConnectorTask.this) {
+                while (nextSeq != recordSeq) {
+                    try {
+                        this.wait(1_000);
+                    }
+                    catch (InterruptedException ex) {
+                        continue;
+                    }
+                }
+                nextSeq++;
+            }
+            return super.getRecord();
+        }
     }
 }
