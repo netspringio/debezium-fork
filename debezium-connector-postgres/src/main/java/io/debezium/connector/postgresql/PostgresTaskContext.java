@@ -127,7 +127,8 @@ public class PostgresTaskContext extends CdcSourceTaskContext {
                 .exportSnapshotOnCreate(exportSnapshot)
                 .doSnapshot(doSnapshot)
                 .withSchema(schema)
-                .withQueue(queue)
+                .withReceiveQueue(queue)
+                .withProcessingParallelism(config.getProcessingParallelism())
                 .build();
     }
 

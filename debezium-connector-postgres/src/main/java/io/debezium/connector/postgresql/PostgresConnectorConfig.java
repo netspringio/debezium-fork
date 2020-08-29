@@ -927,12 +927,12 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
             .withDefault(10_000)
             .withValidation(Field::isPositiveInteger);
 
-    public static final Field NUM_PROCESSING_THREADS = Field.create("num.processing.threads")
-        .withDisplayName("Number of processing threads")
-        .withType(Type.INT)
-        .withWidth(Width.SHORT)
-        .withDefault(32)
-        .withValidation(Field::isPositiveInteger);
+    public static final Field PROCESSING_PARALLELISM = Field.create("processing.parallelism")
+            .withDisplayName("Parallelism for processing messages from the replication stream receive queue")
+            .withType(Type.INT)
+            .withWidth(Width.SHORT)
+            .withDefault(32)
+            .withValidation(Field::isPositiveInteger);
 
     private final HStoreHandlingMode hStoreHandlingMode;
     private final IntervalHandlingMode intervalHandlingMode;
@@ -941,7 +941,7 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
     private final int maxReceiveQueueSize;
     private final int maxReceiveQueueBatchSize;
     private final Duration receiveQueuePollInterval;
-    private final int numProcessingThreads;
+    private final int processingParallelism;
 
     public PostgresConnectorConfig(Configuration config) {
         super(
@@ -960,7 +960,7 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
         this.maxReceiveQueueSize = config.getInteger(MAX_RECEIVE_QUEUE_SIZE);
         this.maxReceiveQueueBatchSize = config.getInteger(MAX_RECEIVE_QUEUE_BATCH_SIZE);
         this.receiveQueuePollInterval = config.getDuration(RECEIVE_QUEUE_POLL_INTERVAL_MS, ChronoUnit.MILLIS);
-        this.numProcessingThreads = config.getInteger(NUM_PROCESSING_THREADS);
+        this.processingParallelism = config.getInteger(PROCESSING_PARALLELISM);
     }
 
     protected String hostname() {
@@ -1091,8 +1091,8 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
         return receiveQueuePollInterval;
     }
 
-    public int getNumProcessingThreads() {
-        return numProcessingThreads;
+    public int getProcessingParallelism() {
+        return processingParallelism;
     }
 
     @Override

@@ -74,6 +74,7 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
     private final TypeRegistry typeRegistry;
     private final Properties streamParams;
     private final ChangeEventQueue<RawReplicationMessage> receiveQueue;
+    private final int processingParallelism;
 
     private long defaultStartingPos;
     private SlotCreationResult slotCreationInfo;
@@ -111,7 +112,8 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
                                           TypeRegistry typeRegistry,
                                           Properties streamParams,
                                           PostgresSchema schema,
-                                          ChangeEventQueue<RawReplicationMessage> receiveQueue) {
+                                          ChangeEventQueue<RawReplicationMessage> receiveQueue,
+                                          int processingParallelism) {
         super(config, PostgresConnection.FACTORY, null, PostgresReplicationConnection::defaultSettings);
 
         this.originalConfig = config;
@@ -127,6 +129,7 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
         this.typeRegistry = typeRegistry;
         this.streamParams = streamParams;
         this.receiveQueue = receiveQueue;
+        this.processingParallelism = processingParallelism;
         this.slotCreationInfo = null;
         this.hasInitedSlot = false;
     }
@@ -458,7 +461,8 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
             @Override
             public void init(ReplicationMessageProcessor processor) {
                 this.processor = processor;
-                for (int i = 0; i < originalConfig.getInteger(PostgresConnectorConfig.NUM_PROCESSING_THREADS); i++) {
+                LOGGER.info("Starting processing threads = {}", processingParallelism);
+                for (int i = 0; i < processingParallelism; i++) {
                     new Thread() {
                         @Override
                         public void run() {
@@ -481,7 +485,7 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
                                         throw new RuntimeException("Exception in reading from stream: " + ex.getMessage());
                                     }
                                 }
-                                if(records.size() > 0) {
+                                if (records.size() > 0) {
                                     LOGGER.info("Processed {} messages from receive queue", records.size());
                                 }
                                 records.clear();
@@ -678,6 +682,7 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
         private PostgresSchema schema;
         private Properties slotStreamParams = new Properties();
         private ChangeEventQueue<RawReplicationMessage> receiveQueue;
+        private int processingParallelism = DEFAULT_PROCESSING_PARALLELISM;
 
         protected ReplicationConnectionBuilder(Configuration config) {
             assert config != null;
@@ -765,7 +770,7 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
         public ReplicationConnection build() {
             assert plugin != null : "Decoding plugin name is not set";
             return new PostgresReplicationConnection(config, slotName, publicationName, tableFilter, publicationAutocreateMode, plugin, dropSlotOnClose, exportSnapshot,
-                    doSnapshot, statusUpdateIntervalVal, typeRegistry, slotStreamParams, schema, receiveQueue);
+                    doSnapshot, statusUpdateIntervalVal, typeRegistry, slotStreamParams, schema, receiveQueue, processingParallelism);
         }
 
         @Override
@@ -781,8 +786,14 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
         }
 
         @Override
-        public Builder withQueue(final ChangeEventQueue<RawReplicationMessage> receiveQueue) {
+        public Builder withReceiveQueue(final ChangeEventQueue<RawReplicationMessage> receiveQueue) {
             this.receiveQueue = receiveQueue;
+            return this;
+        }
+
+        @Override
+        public Builder withProcessingParallelism(final int processingParallelism) {
+            this.processingParallelism = processingParallelism;
             return this;
         }
     }

@@ -266,11 +266,6 @@ public class PostgresConnectorTask extends BaseSourceTask {
     }
 
     @Override
-    synchronized public void commit() throws InterruptedException {
-        super.commit();
-    }
-
-    @Override
     public String version() {
         return Module.version();
     }
