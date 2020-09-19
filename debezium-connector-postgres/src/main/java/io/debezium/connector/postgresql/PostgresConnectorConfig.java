@@ -911,13 +911,15 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
             .withDisplayName("Receive queue buffer size")
             .withType(Type.INT)
             .withWidth(Width.SHORT)
-            .withDefault(524_288);
+            .withDefault(524_288)
+            .withValidation(Field::isPositiveInteger);
 
     public static final Field MAX_RECEIVE_QUEUE_DRAIN_BATCH_SIZE = Field.create("max.receive.queue.drain.batch.size")
-            .withDisplayName("Max batch size when draining from receive queue")
+            .withDisplayName("Receive queue drain batch size (max)")
             .withType(Type.INT)
             .withWidth(Width.SHORT)
             .withDefault(32_768)
+            .withDescription("Max batch size when draining from receive queue")
             .withValidation(Field::isPositiveInteger);
 
     public static final Field RECEIVE_QUEUE_POLL_INTERVAL_MS = Field.create("receive.queue.poll.interval.ms")
@@ -928,10 +930,11 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
             .withValidation(Field::isPositiveInteger);
 
     public static final Field RECEIVE_QUEUE_PARALLELISM = Field.create("receive.queue.parallelism")
-            .withDisplayName("Parallelism for processing messages from the replication stream receive queue")
+            .withDisplayName("Receive queue parallelism (number of threads)")
             .withType(Type.INT)
             .withWidth(Width.SHORT)
             .withDefault(32)
+            .withDescription("Parallelism for processing messages from the replication stream receive queue")
             .withValidation(Field::isPositiveInteger);
 
     private final HStoreHandlingMode hStoreHandlingMode;
@@ -1083,7 +1086,7 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
         return maxReceiveQueueSize;
     }
 
-    public int getMaxReceiveQueueBatchSize() {
+    public int getMaxReceiveQueueDrainBatchSize() {
         return maxReceiveQueueDrainBatchSize;
     }
 

@@ -53,9 +53,13 @@ public class BufferingChangeEventQueue<T> extends ChangeEventQueue<T> {
         }
     }
 
-    private void drain(List<T> buffer) throws InterruptedException {
-        for (T elem : buffer) {
+    private void addAll(LinkedList<T> buffer) throws InterruptedException {
+        // Since super.enqueue() may throw an exception before actually enqueuing
+        // the given element, we do not remove elem until enqueue has succeeded.
+        while (!buffer.isEmpty()) {
+            T elem = buffer.getFirst();
             super.enqueue((T) elem);
+            buffer.removeFirst();
         }
     }
 
@@ -68,20 +72,26 @@ public class BufferingChangeEventQueue<T> extends ChangeEventQueue<T> {
     }
 
     /**
-     * Flushes all records buffered in this thread and stops buffering.
-     * Caller must re-invoke {@link #startBuffering()} to resume buffering.
+     * Flushes all records buffered in this thread.
      * @throws InterruptedException
      */
-    public static void endBuffering() throws InterruptedException {
+    public static void flush() throws InterruptedException {
         BufferingContext c = context.get();
-        context.remove();
         if (c.queue != null) {
-            c.queue.drain(c.buffer);
+            c.queue.addAll(c.buffer);
         }
+    }
+
+    /**
+     * Stops buffering.
+     * Caller must re-invoke {@link #startBuffering()} to resume buffering.
+     */
+    public static void endBuffering() {
+        context.remove();
     }
 
     private static class BufferingContext<T> {
         BufferingChangeEventQueue queue;
-        private List<T> buffer = new LinkedList();
+        private LinkedList<T> buffer = new LinkedList();
     }
 }

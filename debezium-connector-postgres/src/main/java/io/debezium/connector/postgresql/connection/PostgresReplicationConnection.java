@@ -77,6 +77,7 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
     private final Properties streamParams;
     private final ChangeEventQueue<RawReplicationMessage> receiveQueue;
     private final int receiveQueueParallelism;
+    private AtomicBoolean closing = new AtomicBoolean(false);
     private ThreadPoolExecutor processorThreadPool;
     private AtomicLong nextProcessedSeq = new AtomicLong(0L);
 
@@ -399,7 +400,7 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
 
     private void incSequence(long inc) {
         synchronized (nextProcessedSeq) {
-            nextProcessedSeq.set(nextProcessedSeq.get() + inc);
+            nextProcessedSeq.addAndGet(inc);
             nextProcessedSeq.notifyAll();
         }
     }
@@ -499,41 +500,53 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
                     processorThreadPool.execute(() -> {
                         LOGGER.info("Starting thread to process from receive queue");
                         while (true) {
-                            List<RawReplicationMessage> records;
-                            try {
-                                records = receiveQueue.poll();
-                            }
-                            catch (InterruptedException ex) {
-                                LOGGER.warn("Processor thread interrupted, stopping");
-                                break;
-                            }
-                            if (records.isEmpty()) {
-                                continue;
+                            List<RawReplicationMessage> records = null;
+                            while (records == null || records.isEmpty()) {
+                                try {
+                                    records = receiveQueue.poll();
+                                } catch (InterruptedException ex) {
+                                    if (closing.get()) {
+                                        break;
+                                    }
+                                    LOGGER.warn(
+                                        "Processing thread interrupted outside of a close request, ignoring", ex);
+                                }
                             }
                             BufferingChangeEventQueue.startBuffering();
                             for (RawReplicationMessage msg : records) {
-                                try {
-                                    deserializeMessages(msg);
-                                }
-                                catch (InterruptedException ex) {
-                                    LOGGER.warn("Processor thread interrupted, stopping");
-                                    break;
-                                }
-                                catch (SQLException ex) {
-                                    // We cannot simply ignore this failure and move to the next message
-                                    // as that may violate ordering and exactly-once semantics.
-                                    LOGGER.warn("Processor thread exception:", ex);
-                                    throw new RuntimeException("Exception in reading from stream: " + ex.getMessage());
+                                while (true) {
+                                    try {
+                                        deserializeMessages(msg);
+                                    } catch (InterruptedException ex) {
+                                        if (closing.get()) {
+                                            break;
+                                        }
+                                        LOGGER.warn(
+                                            "Processing thread interrupted outside of a close request, ignoring", ex);
+                                    } catch (SQLException ex) {
+                                        // We cannot simply ignore this failure and move to the next message
+                                        // as that may violate ordering and exactly-once semantics.
+                                        // TODO(abhishek): How do we abort the overall connector when this happens?
+                                        // Simply throwing an exception would stall the other threads any way.
+                                        LOGGER.warn("Processor thread exception:", ex);
+                                        throw new RuntimeException("Exception in reading from stream: " + ex.getMessage());
+                                    }
                                 }
                             }
                             long beginSeq = records.get(0).getSeq();
-                            try {
-                                waitForSequence(beginSeq);
-                                BufferingChangeEventQueue.endBuffering();
+                            while (true) {
+                                try {
+                                    waitForSequence(beginSeq);
+                                    BufferingChangeEventQueue.flush();
+                                } catch (InterruptedException ex) {
+                                    if (closing.get()) {
+                                        break;
+                                    }
+                                    LOGGER.warn(
+                                        "Processing thread interrupted outside of a close request, ignoring", ex);
+                                }
                             }
-                            catch (InterruptedException ex) {
-                                break;
-                            }
+                            BufferingChangeEventQueue.endBuffering();
                             incSequence(records.size());
                             LOGGER.info("Processed {} messages from receive queue", records.size());
                             records.clear();
@@ -586,6 +599,7 @@ public class PostgresReplicationConnection extends JdbcConnection implements Rep
 
             @Override
             public void close() throws SQLException {
+                closing.set(true);
                 processWarnings(true);
                 stream.close();
                 // Shutdown immediately to reduce the likelihood of the threadpool still

@@ -24,7 +24,6 @@ import io.debezium.connector.base.ChangeEventQueue;
 import io.debezium.connector.common.BaseSourceTask;
 import io.debezium.connector.postgresql.connection.BufferingChangeEventQueue;
 import io.debezium.connector.postgresql.connection.PostgresConnection;
-import io.debezium.connector.postgresql.connection.PostgresReplicationConnection;
 import io.debezium.connector.postgresql.connection.RawReplicationMessage;
 import io.debezium.connector.postgresql.connection.ReplicationConnection;
 import io.debezium.connector.postgresql.metrics.PostgresChangeEventSourceMetricsFactory;
@@ -87,7 +86,7 @@ public class PostgresConnectorTask extends BaseSourceTask {
 
         this.receiveQueue = new ChangeEventQueue.Builder<RawReplicationMessage>()
                 .pollInterval(connectorConfig.getReceiveQueuePollInterval())
-                .maxBatchSize(connectorConfig.getMaxReceiveQueueBatchSize())
+                .maxBatchSize(connectorConfig.getMaxReceiveQueueDrainBatchSize())
                 .maxQueueSize(connectorConfig.getMaxReceiveQueueSize())
                 .loggingContextSupplier(() -> taskContext.configureLoggingContext(CONTEXT_NAME))
                 .build();
@@ -126,7 +125,7 @@ public class PostgresConnectorTask extends BaseSourceTask {
             if (snapshotter.shouldStream()) {
                 final boolean shouldExport = snapshotter.exportSnapshot();
                 final boolean doSnapshot = snapshotter.shouldSnapshot();
-                replicationConnection = (PostgresReplicationConnection) createReplicationConnection(
+                replicationConnection = createReplicationConnection(
                         this.taskContext, shouldExport,
                         doSnapshot, connectorConfig.maxRetries(), connectorConfig.retryDelay());
 

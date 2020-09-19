@@ -181,11 +181,20 @@ public class PostgresStreamingChangeEventSource implements StreamingChangeEventS
             int noMessageIterations = 0;
 
             while (context.isRunning()) {
-                // TODO(abhishek): With synchronous processing, readPending() was guaranteed
-                // to have fully processed the message before returning, so the following
-                // actions assumed that, such as connection.commit() [see DBZ-2118]. With
-                // async processing, that's no longer true. However, this should still be
-                // mostly alright as long as the stream is active.
+                // This block is unmodified from vanilla Debezium. In vanilla
+                // Debezium, it gets invoked after a replication record is read
+                // from source and fully processed, and before reading the next record
+                // from source. Thus it served as a useful checkpoint for tracking
+                // progress, committing any transactions left open by the processing, etc.
+                // With background processing though, this block gets invoked after each
+                // record is read from source (and before the next record is read) without
+                // waiting for the newly read record to be processed. Thus some of these
+                // actions may not serve the intended purpose. E.g. the commit() below may
+                // run before or concurrently with background processing that opens a
+                // transaction and leaves it orphaned. Thus it may fail to cleanup orphaned
+                // transactions, or prematurely close it, breaking the processing.
+                // TODO(abhishek): move the commit() call and other relevant logic to
+                // processing path.
                 boolean receivedMessage = stream.readPending();
                 if (receivedMessage) {
                     noMessageIterations = 0;
